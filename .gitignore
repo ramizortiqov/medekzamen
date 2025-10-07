@@ -1,0 +1,18 @@
+# Файл с токеном
+.env
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# IDE и редакторы
+.vscode/
+.idea/
+
+# Логи
+*.log
+
+# Временные или большие файлы
+tmp/
+data/
+venv/
