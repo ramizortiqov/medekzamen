@@ -7,8 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-POSTGRES_DSN = "postgresql://ramiz:unppr78026@amvera-ramizortiqov-cnpg-medekzamendb-rw:5432/bot_database"
-
+DATABASE_URL = os.getenv("DATABASE_URL")
 app = FastAPI()
 
 # Разрешаем фронтенду (Vercel) подключаться
@@ -22,7 +21,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    app.state.db = await asyncpg.create_pool(POSTGRES_DSN)
+    app.state.db = await asyncpg.create_pool(DATABASE_URL)
     print("✅ Database connected")
 
 @app.get("/api/files")

@@ -39,7 +39,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    app.state.db = await asyncpg.create_pool(POSTGRES_DSN)
+    app.state.db = await asyncpg.create_pool(DATABASE_URL)
     print("✅ Database connected")
 
 @app.get("/api/files")
@@ -72,7 +72,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # АДМИНИСТРАТОРЫ
 ADMIN_IDS = [6720999592, 6520890849]
-POSTGRES_DSN = os.getenv("POSTGRES_DSN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 # КАНАЛ ДЛЯ ПРОВЕРКИ ПОДПИСКИ
 CHANNEL_ID = -1002034189536
 CHANNEL_URL = "https://t.me/fr_ray7"
@@ -300,7 +300,7 @@ class PostgresDB:
     async def init_pool(self):
         """Инициализирует пул подключений к PostgreSQL."""
         try:
-            self.pool = await asyncpg.create_pool(POSTGRES_DSN)
+            self.pool = await asyncpg.create_pool(DATABASE_URL)
             logger.info("PostgreSQL pool initialized successfully.")
             await self._init_db_schema()
         except Exception as e:
