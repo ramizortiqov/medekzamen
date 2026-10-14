@@ -359,7 +359,7 @@ class PostgresDB:
     async def init_pool(self):
         """Инициализирует пул подключений к PostgreSQL."""
         try:
-            self.pool = await asyncpg.create_pool(POSTGRES_DSN)
+            self.pool = await asyncpg.create_pool(DATABASE_URL)
             logger.info("PostgreSQL pool initialized successfully.")
             await self._init_db_schema()
         except Exception as e:
