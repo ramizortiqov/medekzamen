@@ -28,7 +28,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # АДМИНИСТРАТОРЫ
 ADMIN_IDS = [6720999592, 6520890849, 5743119052]
-DATABASE_URL = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")  # Используем DATABASE_URL для подключения к PostgreSQL
 # КАНАЛ ДЛЯ ПРОВЕРКИ ПОДПИСКИ
 CHANNEL_ID = -1002034189536
 CHANNEL_URL = "https://t.me/fr_ray7"
