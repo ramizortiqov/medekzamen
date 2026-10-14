@@ -11,7 +11,7 @@ import asyncpg
 from dotenv import load_dotenv
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, types
-from aiogram.client.default import DefaultBotProperties
+# from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command, StateFilter
@@ -69,7 +69,7 @@ def build_storage():
 
 
 storage = build_storage()
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=storage)
 
 # -------------------- 3. ДАННЫЕ О КУРСАХ И ПРЕДМЕТАХ --------------------
