@@ -72,7 +72,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # АДМИНИСТРАТОРЫ
 ADMIN_IDS = [6720999592, 6520890849]
-POSTGRES_DSN = "postgresql://ramiz:unppr78026@amvera-ramizortiqov-cnpg-medekzamendb-rw:5432/bot_database"
+POSTGRES_DSN = os.getenv("POSTGRES_DSN")
 # КАНАЛ ДЛЯ ПРОВЕРКИ ПОДПИСКИ
 CHANNEL_ID = -1002034189536
 CHANNEL_URL = "https://t.me/fr_ray7"
