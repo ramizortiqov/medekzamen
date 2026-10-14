@@ -15,64 +15,20 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import WebAppInfo, CallbackQuery
-import asyncio
-import requests
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+from aiogram import BaseMiddleware
+from typing import Callable, Dict, Any, Awaitable
+
 # -------------------- 1. НАСТРОЙКА ЛОГИРОВАНИЯ --------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # -------------------- 2. НАСТРОЙКА И КОНСТАНТЫ --------------------
 load_dotenv()
-
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://mini-app-mauve-alpha.vercel.app"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.on_event("startup")
-async def startup():
-    app.state.db = await asyncpg.create_pool(DATABASE_URL)
-    print("✅ Database connected")
-
-@app.get("/api/files")
-async def get_files(request: Request):
-    async with app.state.db.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, file_name, file_id FROM materials ORDER BY created_at DESC LIMIT 50"
-        )
-
-    files = []
-    for row in rows:
-        file_id = row["file_id"]
-        name = row["file_name"] or "Без названия"
-        try:
-            r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}")
-            data = r.json()
-            if "result" not in data:
-                continue
-            file_path = data["result"]["file_path"]
-            download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-            files.append({"name": name, "url": download_url})
-        except Exception as e:
-            print(f"Ошибка получения file_path: {e}")
-
-    return files
-
-
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 # АДМИНИСТРАТОРЫ
-ADMIN_IDS = [6720999592, 6520890849]
-DATABASE_URL = os.getenv("DATABASE_URL")
+ADMIN_IDS = [6720999592, 6520890849, 5743119052]
+DATABASE_URL = os.getenv("BOT_TOKEN")
 # КАНАЛ ДЛЯ ПРОВЕРКИ ПОДПИСКИ
 CHANNEL_ID = -1002034189536
 CHANNEL_URL = "https://t.me/fr_ray7"
@@ -81,10 +37,11 @@ FEEDBACK_USERNAME_URL = "https://t.me/parviz_medik"
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен в .env")
 
-# Инициализация бота с хранилищем
+# Инициализация бота с хранилищемS
 storage = MemoryStorage()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
+
 
 # Константы для групп и курсов
 GROUPS = {"ru": "🇷🇺 Русский", "tj": "🇹🇯 Таджикский"}
@@ -271,7 +228,28 @@ MATERIAL_TYPES = {
     "video": "🎥 Видео"
 }
 
-# --- СПИСОК ВСЕХ ТЕГОВ ДЛЯ АДМИНА --a-
+def get_admin_main_menu_keyboard():
+    """Главное меню для администратора с дополнительными кнопками"""
+    builder = ReplyKeyboardBuilder()
+    
+    # Основные разделы
+    builder.button(text="📚 Экзамен")
+    builder.button(text="📂 Материалы")
+    builder.button(text="📋 Итог")
+    
+    # Админ-функции
+    builder.button(text="📢 Рассылка")
+    builder.button(text="📊 Статистика")
+    builder.button(text="🚫 Заблокированные")
+    
+    # Дополнительные
+    builder.button(text="🚪 Личный кабинет")
+    builder.button(text="✉️ Обратная связь")
+    
+    builder.adjust(3, 3, 2)  # 3 кнопки в первом ряду, 3 во втором, 2 в третьем
+    return builder.as_markup(resize_keyboard=True)
+
+# --- СПИСОК ВСЕХ ТЕГОВ ДЛЯ АДМИНА ---
 ALL_ADMIN_TAGS = []
 for course in range(1, MAX_COURSE_FOR_SUMMARY + 1):
     for i in range(1, 5):
@@ -290,6 +268,87 @@ for material_type in MATERIAL_TYPES.keys():
         if combined_tag not in ALL_ADMIN_TAGS:
             ALL_ADMIN_TAGS.append(combined_tag)
 
+
+
+# ... после строки dp = Dispatcher(storage=storage)
+
+class SubscriptionMiddleware(BaseMiddleware):
+    """Middleware для проверки подписки и блокировки при каждом сообщении."""
+    
+    async def __call__(
+        self,
+        handler: Callable[[types.Message, Dict[str, Any]], Awaitable[Any]],
+        event: types.Message,
+        data: Dict[str, Any]
+    ) -> Any:
+        user_id = event.from_user.id
+        
+        # Админы всегда имеют доступ
+        if user_id in ADMIN_IDS:
+            return await handler(event, data)
+        
+        # Проверка блокировки
+        if await db.is_user_blocked(user_id):
+            await event.answer(
+                "🚫 **Ваш аккаунт заблокирован.**\n\n"
+                "Если вы считаете, что это ошибка, свяжитесь с администратором.",
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Проверка подписки
+        if not await check_subscription(user_id):
+            await event.answer(
+                get_no_access_message(),
+                reply_markup=get_subscription_keyboard(),
+                parse_mode="Markdown"
+            )
+            return
+        
+        # Всё ок — продолжаем обработку
+        return await handler(event, data)
+
+
+class CallbackSubscriptionMiddleware(BaseMiddleware):
+    """Middleware для проверки подписки при callback-запросах."""
+    
+    async def __call__(
+        self,
+        handler: Callable[[types.CallbackQuery, Dict[str, Any]], Awaitable[Any]],
+        event: types.CallbackQuery,
+        data: Dict[str, Any]
+    ) -> Any:
+        user_id = event.from_user.id
+        
+        # Админы всегда имеют доступ
+        if user_id in ADMIN_IDS:
+            return await handler(event, data)
+        
+        # Разрешаем проверку подписки без проверки
+        if event.data == "check_subscription":
+            return await handler(event, data)
+        
+        # Проверка блокировки
+        if await db.is_user_blocked(user_id):
+            await event.answer("🚫 Ваш аккаунт заблокирован.", show_alert=True)
+            return
+        
+        # Проверка подписки
+        if not await check_subscription(user_id):
+            await event.answer(
+                "⚠️ Подпишитесь на канал для использования бота!",
+                show_alert=True
+            )
+            # Отправляем сообщение с кнопкой подписки
+            await event.message.answer(
+                get_no_access_message(),
+                reply_markup=get_subscription_keyboard(),
+                parse_mode="Markdown"
+            )
+            return
+        
+        return await handler(event, data)
+
 # -------------------- 3. БАЗА ДАННЫХ (PostgreSQL) --------------------
 
 class PostgresDB:
@@ -300,7 +359,7 @@ class PostgresDB:
     async def init_pool(self):
         """Инициализирует пул подключений к PostgreSQL."""
         try:
-            self.pool = await asyncpg.create_pool(DATABASE_URL)
+            self.pool = await asyncpg.create_pool(POSTGRES_DSN)
             logger.info("PostgreSQL pool initialized successfully.")
             await self._init_db_schema()
         except Exception as e:
@@ -330,6 +389,12 @@ class PostgresDB:
                     group_lang TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS blocked_users (
+                user_id BIGINT PRIMARY KEY,
+                blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                blocked_by BIGINT,
+                reason TEXT
+            );
                 CREATE INDEX IF NOT EXISTS idx_materials_tag ON materials (tag);
                 CREATE INDEX IF NOT EXISTS idx_materials_course_group ON materials (course, group_lang);
             ''')
@@ -350,6 +415,40 @@ class PostgresDB:
                 username = EXCLUDED.username, full_name = EXCLUDED.full_name,
                 course = EXCLUDED.course, group_lang = EXCLUDED.group_lang
             ''', user_id, username, full_name, course, group_lang)
+            
+    async def block_user(self, user_id: int, blocked_by: int, reason: str = None):
+        """Блокирует пользователя."""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO blocked_users (user_id, blocked_by, reason)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id) DO UPDATE SET
+                blocked_at = CURRENT_TIMESTAMP,
+                blocked_by = EXCLUDED.blocked_by,
+                reason = EXCLUDED.reason
+            ''', user_id, blocked_by, reason)
+
+    async def unblock_user(self, user_id: int):
+        """Разблокирует пользователя."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute('DELETE FROM blocked_users WHERE user_id = $1', user_id)
+            return int(result.split()[-1])
+
+    async def is_user_blocked(self, user_id: int) -> bool:
+        """Проверяет, заблокирован ли пользователь."""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchval('SELECT user_id FROM blocked_users WHERE user_id = $1', user_id)
+            return result is not None
+
+    async def get_blocked_users(self):
+        """Получает список всех заблокированных пользователей."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT b.user_id, b.blocked_at, b.blocked_by, b.reason, u.username, u.full_name
+                FROM blocked_users b
+                LEFT JOIN users u ON b.user_id = u.user_id
+                ORDER BY b.blocked_at DESC
+            ''')
 
     async def get_materials_by_tag(self, tag: str):
         """Получает материалы по тегу."""
@@ -452,6 +551,25 @@ async def check_subscription(user_id: int) -> bool:
     except Exception as e:
         logger.error(f"Ошибка при проверке подписки для user_id {user_id}: {e}")
         return False
+    
+async def check_user_access(user_id: int) -> tuple[bool, str]:
+    """
+    Проверяет доступ пользователя (подписка + блокировка).
+    Возвращает (has_access, error_message).
+    """
+    # Админы всегда имеют доступ
+    if user_id in ADMIN_IDS:
+        return True, ""
+    
+    # Проверка блокировки
+    if await db.is_user_blocked(user_id):
+        return False, "🚫 **Ваш аккаунт заблокирован.**\n\nЕсли вы считаете, что это ошибка, свяжитесь с администратором."
+    
+    # Проверка подписки
+    if not await check_subscription(user_id):
+        return False, ""  # Пустая строка означает, что нужно показать стандартное сообщение о подписке
+    
+    return True, ""
 
 def clean_tags(text: str, tag: str) -> str:
     if not text:
@@ -465,6 +583,8 @@ def get_reply_main_menu_keyboard(user_course: int = None, user_id: int = None):
     builder = ReplyKeyboardBuilder()
     
     is_admin = user_id in ADMIN_IDS if user_id else False
+    if is_admin:
+        return get_admin_main_menu_keyboard()
     
     if user_course:
         builder.button(text="📚 Экзамен")
@@ -744,7 +864,7 @@ async def send_content_by_tag(chat_id: int, tag: str, course_filter_value: int =
 async def cmd_start(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     logger.info(f"User {user_id} started the bot")
-    
+        
     if not await check_subscription(user_id):
         await message.answer(get_no_access_message(), reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
         return
@@ -771,7 +891,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
             user_course = user_data['course']
             
         await message.answer(
-            f"👑 <b>Админ-меню.</b>",
+            f"👑 <b>Админ-меню.</b>\n💡 Для справки используйте /admin_help",
             reply_markup=get_reply_main_menu_keyboard(user_course, user_id),
             parse_mode="HTML"
         )
@@ -891,24 +1011,48 @@ async def process_confirmation(message: types.Message, state: FSMContext):
 # -------------------- 9. ОБРАБОТЧИКИ МЕНЮ --------------------
 @dp.callback_query(F.data == "check_subscription")
 async def check_subscription_callback_handler(callback: types.CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
+    user_id = callback.from_user.id # Берём правильный ID пользователя, который нажал кнопку
     
+    if await db.is_user_blocked(user_id):
+        await callback.answer("🚫 Ваш аккаунт заблокирован.", show_alert=True)
+        return
+    
+    # Проверяем подписку
     if await check_subscription(user_id):
-        user_data = await db.get_user(user_id)
-        user_course = user_data['course'] if user_data else None
         
-        # 1. Удаляем инлайн-клавиатуру из предыдущего сообщения
-        await callback.message.edit_reply_markup(reply_markup=None)
+        # 1. Удаляем клавиатуру "Проверить"
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except:
+            pass
         
-        # 2. Оповещаем пользователя (опционально)
         await callback.answer("✅ Подписка подтверждена!", show_alert=False)
-        
-        # 3. Вызываем cmd_start для инициализации регистрации/меню
-        await cmd_start(callback.message, state)
+
+        # 2. Ищем пользователя в базе (ЗДЕСЬ КЛЮЧЕВОЙ МОМЕНТ)
+        user_data = await db.get_user(user_id)
+
+        if user_data:
+            # --- ВАРИАНТ 1: Пользователь уже был в базе (вернулся) ---
+            user_course = user_data['course']
+            
+            # Сразу выдаем меню, минуя регистрацию
+            await callback.message.answer(
+                f"✅ С возвращением! Вы учитесь на {user_course}-м курсе.\nВыберите раздел:",
+                reply_markup=get_reply_main_menu_keyboard(user_course, user_id)
+            )
+        else:
+            # --- ВАРИАНТ 2: Это абсолютно новый пользователь ---
+            await callback.message.answer(
+                "🎓 <b>Добро пожаловать!</b>\n\n"
+                "Для персонализации материалов, пожалуйста, укажите ваш курс:",
+                reply_markup=get_course_selection_keyboard(),
+                parse_mode="HTML"
+            )
+            # Запускаем машину состояний для регистрации
+            await state.set_state(RegistrationStates.waiting_for_course)
         
     else:
         await callback.answer("❌ Подписка не найдена. Попробуйте снова.", show_alert=True)
-
 # --- УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ДЛЯ КНОПКИ "🔙 Главное меню" ---
 @dp.message(F.text == "🔙 Главное меню")
 async def back_to_main_menu(message: types.Message, state: FSMContext):
@@ -1951,6 +2095,146 @@ async def process_indexed_deletion(message: types.Message, state: FSMContext):
     user_course = user_data['course'] if user_data else None
     await message.answer("Удаление завершено.", reply_markup=get_reply_main_menu_keyboard(user_course, user_id))
 
+
+
+@dp.message(Command("block"))
+async def cmd_block_user(message: types.Message):
+    """Блокировка пользователя по ID."""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    args = message.text.split(maxsplit=2)
+    
+    if len(args) < 2:
+        return await message.answer(
+            "📝 <b>Использование:</b>\n"
+            "<code>/block USER_ID [причина]</code>\n\n"
+            "<b>Пример:</b>\n"
+            "<code>/block 123456789 Спам</code>",
+            parse_mode="HTML"
+        )
+    
+    try:
+        target_user_id = int(args[1])
+    except ValueError:
+        return await message.answer("❌ Неверный формат ID. Введите числовой ID пользователя.")
+    
+    # Нельзя заблокировать админа
+    if target_user_id in ADMIN_IDS:
+        return await message.answer("❌ Невозможно заблокировать администратора.")
+    
+    reason = args[2] if len(args) > 2 else None
+    
+    await db.block_user(target_user_id, message.from_user.id, reason)
+    
+    # Получаем информацию о пользователе
+    user_data = await db.get_user(target_user_id)
+    
+    if user_data:
+        username = f"@{user_data['username']}" if user_data['username'] else "Нет username"
+        full_name = user_data['full_name'] or "Неизвестно"
+        course = user_data['course']
+        group_lang = GROUPS.get(user_data['group_lang'], user_data['group_lang'])
+        
+        user_info = (
+            f"👤 <b>Имя:</b> {full_name}\n"
+            f"📱 <b>Username:</b> {username}\n"
+            f"🆔 <b>ID:</b> <code>{target_user_id}</code>\n"
+            f"📚 <b>Курс:</b> {course}-й\n"
+            f"🌐 <b>Группа:</b> {group_lang}"
+        )
+    else:
+        user_info = (
+            f"👤 <b>Имя:</b> Не зарегистрирован\n"
+            f"🆔 <b>ID:</b> <code>{target_user_id}</code>"
+        )
+        
+    await message.answer(
+        f"🚫 <b>Пользователь заблокирован</b>\n\n"
+        f"👤 {user_info}\n"
+        f"🆔 <code>{target_user_id}</code>\n"
+        f"📝 Причина: {reason or 'Не указана'}",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("unblock"))
+async def cmd_unblock_user(message: types.Message):
+    """Разблокировка пользователя по ID."""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    args = message.text.split()
+    
+    if len(args) < 2:
+        return await message.answer(
+            "📝 <b>Использование:</b>\n"
+            "<code>/unblock USER_ID</code>\n\n"
+            "<b>Пример:</b>\n"
+            "<code>/unblock 123456789</code>",
+            parse_mode="HTML"
+        )
+    
+    try:
+        target_user_id = int(args[1])
+    except ValueError:
+        return await message.answer("❌ Неверный формат ID. Введите числовой ID пользователя.")
+    
+    deleted = await db.unblock_user(target_user_id)
+    
+    if deleted > 0:
+        await message.answer(
+            f"✅ <b>Пользователь разблокирован</b>\n\n"
+            f"🆔 <code>{target_user_id}</code>",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer(
+            f"ℹ️ Пользователь <code>{target_user_id}</code> не был в списке заблокированных.",
+            parse_mode="HTML"
+        )
+
+
+@dp.message(Command("blocklist"))
+async def cmd_blocklist(message: types.Message):
+    """Список заблокированных пользователей."""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    blocked_users = await db.get_blocked_users()
+    
+    if not blocked_users:
+        return await message.answer("📋 Список заблокированных пользователей пуст.")
+    
+    response = "🚫 <b>ЗАБЛОКИРОВАННЫЕ ПОЛЬЗОВАТЕЛИ</b>\n\n"
+    
+    for i, user in enumerate(blocked_users, 1):
+        user_id = user['user_id']
+        username = f"@{user['username']}" if user['username'] else "—"
+        full_name = user['full_name'] or "Неизвестно"
+        blocked_at = str(user['blocked_at'])[:16]
+        reason = user['reason'] or "Не указана"
+        
+        # Получаем дополнительную информацию о курсе
+        user_data = await db.get_user(user_id)
+        if user_data:
+            course = f"{user_data['course']}-й курс"
+            group = GROUPS.get(user_data['group_lang'], "—")
+        else:
+            course = "—"
+            group = "—"
+        
+        response += (
+            f"<b>{i}.</b> {full_name}\n"
+            f"   📱 {username}\n"
+            f"   🆔 <code>{user_id}</code>\n"
+            f"   📚 {course} | 🌐 {group}\n"
+            f"   📅 {blocked_at}\n"
+            f"   📝 {reason}\n\n"
+        )
+    
+    await message.answer(response, parse_mode="HTML")
+
 @dp.message(Command("admin_stats"))
 async def cmd_admin_stats(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -2076,6 +2360,157 @@ async def feedback_handler(message: types.Message, state: FSMContext):
     )
     await state.set_state(FeedbackStates.waiting_for_feedback_message)
 
+# -------------------- АДМИН-МЕНЮ: РАССЫЛКА --------------------
+@dp.message(F.text == "📢 Рассылка")
+async def admin_broadcast_button(message: types.Message, state: FSMContext):
+    """Кнопка рассылки в админ-меню"""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    # Вызываем существующую команду /broadcast
+    await cmd_start_broadcast(message, state)
+
+
+# -------------------- АДМИН-МЕНЮ: СТАТИСТИКА --------------------
+@dp.message(F.text == "📊 Статистика")
+async def admin_stats_button(message: types.Message):
+    """Кнопка статистики в админ-меню"""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    # Вызываем существующую команду /admin_stats
+    await cmd_admin_stats(message)
+
+
+# -------------------- АДМИН-МЕНЮ: ЗАБЛОКИРОВАННЫЕ --------------------
+@dp.message(F.text == "🚫 Заблокированные")
+async def admin_blocklist_button(message: types.Message):
+    """Показывает список заблокированных с кнопками управления"""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    blocked_users = await db.get_blocked_users()
+    
+    if not blocked_users:
+        return await message.answer(
+            "📋 Список заблокированных пользователей пуст.\n\n"
+            "💡 <b>Команды для блокировки:</b>\n"
+            "<code>/block USER_ID [причина]</code> - Заблокировать\n"
+            "<code>/unblock USER_ID</code> - Разблокировать",
+            parse_mode="HTML"
+        )
+    
+    response = "🚫 <b>ЗАБЛОКИРОВАННЫЕ ПОЛЬЗОВАТЕЛИ</b>\n\n"
+    
+    # Создаем инлайн-кнопки для разблокировки
+    builder = InlineKeyboardBuilder()
+    
+    for i, user in enumerate(blocked_users, 1):
+        user_id = user['user_id']
+        username = f"@{user['username']}" if user['username'] else "—"
+        full_name = user['full_name'] or "Неизвестно"
+        blocked_at = str(user['blocked_at'])[:16]
+        reason = user['reason'] or "Не указана"
+        
+        # Получаем дополнительную информацию о курсе
+        user_data = await db.get_user(user_id)
+        if user_data:
+            course = f"{user_data['course']}-й курс"
+            group = GROUPS.get(user_data['group_lang'], "—")
+        else:
+            course = "—"
+            group = "—"
+        
+        response += (
+            f"<b>{i}.</b> {full_name}\n"
+            f"   📱 {username}\n"
+            f"   🆔 <code>{user_id}</code>\n"
+            f"   📚 {course} | 🌐 {group}\n"
+            f"   📅 {blocked_at}\n"
+            f"   📝 {reason}\n\n"
+        )
+        
+        # Добавляем кнопку разблокировки
+        builder.button(
+            text=f"✅ Разблокировать {full_name[:15]}...",
+            callback_data=f"unblock_user__{user_id}"
+        )
+    
+    builder.adjust(1)  # По одной кнопке в ряд
+    
+    response += "\n💡 <b>Команды:</b>\n"
+    response += "<code>/block USER_ID [причина]</code> - Заблокировать\n"
+    response += "Или нажмите кнопку ниже для разблокировки ⬇️"
+    
+    await message.answer(response, reply_markup=builder.as_markup(), parse_mode="HTML")
+
+
+# Обработчик для кнопок разблокировки
+@dp.callback_query(F.data.startswith('unblock_user__'))
+async def callback_unblock_user(callback: types.CallbackQuery):
+    """Разблокировка пользователя через callback"""
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("⛔ Доступ запрещен.", show_alert=True)
+        return
+    
+    target_user_id = int(callback.data.split('__')[1])
+    
+    deleted = await db.unblock_user(target_user_id)
+    
+    if deleted > 0:
+        await callback.answer("✅ Пользователь разблокирован!", show_alert=True)
+        
+        # Обновляем список
+        await callback.message.delete()
+        
+        # Создаем новое сообщение с обновленным списком
+        temp_message = types.Message(
+            message_id=0,
+            date=datetime.now(),
+            chat=callback.message.chat,
+            from_user=callback.from_user,
+            text="🚫 Заблокированные"
+        )
+        await admin_blocklist_button(temp_message)
+    else:
+        await callback.answer(
+            "ℹ️ Пользователь не был в списке заблокированных.",
+            show_alert=True
+        )
+@dp.message(Command("admin_help"))
+async def cmd_admin_help(message: types.Message):
+    """Показывает все доступные админ-команды"""
+    if message.from_user.id not in ADMIN_IDS:
+        return await message.answer("⛔ Доступ запрещен.")
+    
+    help_text = """
+🛠️ <b>АДМИН-КОМАНДЫ</b>
+
+<b>📢 Рассылка:</b>
+- Кнопка "📢 Рассылка" или <code>/broadcast</code>
+
+<b>📊 Статистика:</b>
+- Кнопка "📊 Статистика" или <code>/admin_stats</code>
+- <code>/admin_materials</code> - Просмотр материалов
+
+<b>🚫 Блокировка:</b>
+- Кнопка "🚫 Заблокированные" или <code>/blocklist</code>
+- <code>/block USER_ID [причина]</code> - Заблокировать
+- <code>/unblock USER_ID</code> - Разблокировать
+
+<b>📁 Управление материалами:</b>
+- <code>/admin_menu</code> - Меню всех разделов
+- Через кнопки "📚 Экзамен", "📂 Материалы", "📋 Итог"
+
+<b>💬 Обратная связь:</b>
+- Ответ на сообщения пользователей через кнопку
+
+<b>ℹ️ Справка:</b>
+- <code>/admin_help</code> - Эта справка
+"""
+    
+    await message.answer(help_text, parse_mode="HTML")
+
 
 @dp.message(FeedbackStates.waiting_for_feedback_message, F.text | F.photo | F.document | F.video | F.audio | F.voice)
 async def process_feedback_message(message: types.Message, state: FSMContext):
@@ -2150,6 +2585,8 @@ async def process_feedback_message(message: types.Message, state: FSMContext):
             reply_markup=get_reply_main_menu_keyboard(user_course, user_id),
             parse_mode="HTML"
         )
+        
+
 
 
 # -------------------- 13. ОТВЕТ АДМИНА НА ОБРАТНУЮ СВЯЗЬ --------------------
@@ -2245,20 +2682,12 @@ async def main():
     except Exception as e:
         logger.error(f"Не удалось подключиться к PostgreSQL: {e}")
         raise
+    
+    dp.message.middleware(SubscriptionMiddleware())
+    dp.callback_query.middleware(CallbackSubscriptionMiddleware())
 
     logger.info("Бот запущен с системой регистрации и PostgreSQL...")
     await dp.start_polling(bot)
-    
-async def start_all():
-    # запускаем бота как задачу
-    bot_task = asyncio.create_task(main())  # твой Telegram-бот
-    # запускаем FastAPI сервер
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
-    # ждем оба процесса
-    await asyncio.gather(bot_task, server_task)
-
 
 if __name__ == "__main__":
-    asyncio.run(start_all())
+    asyncio.run(main())
