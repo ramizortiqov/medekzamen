@@ -53,7 +53,7 @@ REDIS_URL = os.getenv("REDIS_URL")  # необязательно: если за�
 
 # Настройки Google Drive (по умолчанию прописан ваш ID корневой папки medekzamenbot)
 DEFAULT_GDRIVE_ROOT_ID = "1JFm2VPx4SXCB7XS3HRC68_IA2Ef708zv"
-GDRIVE_CREDENTIALS_FILE = os.getenv("GDRIVE_CREDENTIALS_FILE", "credentials.json")
+GDRIVE_CREDENTIALS_FILE = os.getenv("GDRIVE_CREDENTIALS_FILE")
 GDRIVE_ROOT_FOLDER_ID = os.getenv("GDRIVE_ROOT_FOLDER_ID", DEFAULT_GDRIVE_ROOT_ID).strip()
 
 DEFAULT_ADMIN_IDS = {6720999592, 6520890849, 5743119052}
