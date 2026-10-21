@@ -44,8 +44,8 @@ except ImportError:
 # -------------------- 1. ЛОГИРОВАНИЕ --------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-# -------------------- 2. НАСТРОЙКИ --------------------
+#Hi HIHIHIIHIHIIH
+# ------------------- 2. НАСТРОЙКИ --------------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
