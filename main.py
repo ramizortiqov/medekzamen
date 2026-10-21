@@ -44,8 +44,8 @@ except ImportError:
 # -------------------- 1. ЛОГИРОВАНИЕ --------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-#Hi HIHIHIIHIHIIH
-# ------------------- 2. НАСТРОЙКИ --------------------
+
+# -------------------- 2. НАСТРОЙКИ --------------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -53,7 +53,52 @@ REDIS_URL = os.getenv("REDIS_URL")  # необязательно: если за�
 
 # Настройки Google Drive (по умолчанию прописан ваш ID корневой папки medekzamenbot)
 DEFAULT_GDRIVE_ROOT_ID = "1JFm2VPx4SXCB7XS3HRC68_IA2Ef708zv"
-GDRIVE_CREDENTIALS_FILE = os.getenv("GDRIVE_CREDENTIALS_FILE")
+GDRIVE_CREDENTIALS_FILE = os.getenv("GDRIVE_CREDENTIALS_FILE", "credentials.json")
+# Ключ сервисного аккаунта можно передать не файлом (его нельзя хранить в git),
+# а содержимым JSON (или его base64) в переменной окружения GDRIVE_CREDENTIALS_JSON.
+def _load_gdrive_credentials_from_env() -> Optional[str]:
+    """Возвращает путь к временному файлу с ключом или None, если ключа в переменной нет/он битый."""
+    import base64
+    import tempfile
+    _log = logging.getLogger(__name__)
+    raw = os.getenv("GDRIVE_CREDENTIALS_JSON", "").strip()
+    if not raw:
+        return None
+    # убираем возможные внешние кавычки
+    if len(raw) > 1 and raw[0] == raw[-1] and raw[0] in "'\"":
+        raw = raw[1:-1].strip()
+    data = None
+    candidates = [raw]
+    try:
+        candidates.append(base64.b64decode(raw, validate=True).decode("utf-8"))
+    except Exception:
+        pass
+    for cand in candidates:
+        try:
+            # strict=False терпит настоящие переносы строк внутри private_key
+            data = json.loads(cand, strict=False)
+            break
+        except Exception:
+            continue
+    if not isinstance(data, dict) or "private_key" not in data or "client_email" not in data:
+        _log.error("GDRIVE_CREDENTIALS_JSON задана, но не распознана как ключ сервисного аккаунта "
+                   "(нужен полный JSON с полями private_key и client_email или его base64)")
+        return None
+    # на случай если \n превратились в \\n или переносы потерялись
+    pk = data["private_key"]
+    if "\\n" in pk:
+        data["private_key"] = pk.replace("\\n", "\n")
+    path = os.path.join(tempfile.gettempdir(), "gdrive_credentials.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    _log.info(f"Ключ Google Диска загружен из GDRIVE_CREDENTIALS_JSON ({data['client_email']})")
+    return path
+
+
+if not os.path.exists(GDRIVE_CREDENTIALS_FILE):
+    _env_creds_path = _load_gdrive_credentials_from_env()
+    if _env_creds_path:
+        GDRIVE_CREDENTIALS_FILE = _env_creds_path
 GDRIVE_ROOT_FOLDER_ID = os.getenv("GDRIVE_ROOT_FOLDER_ID", DEFAULT_GDRIVE_ROOT_ID).strip()
 
 DEFAULT_ADMIN_IDS = {6720999592, 6520890849, 5743119052}
